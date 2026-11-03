@@ -1,0 +1,71 @@
+# ─── Node / npm ───────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+**/package-lock.json
+!/package-lock.json
+
+# ─── Build outputs ────────────────────────────────────────────────
+client/dist/
+client/build/
+server/dist/
+server/build/
+
+# ─── Environment files & secrets ──────────────────────────────────
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+.env.development
+.env.production
+server/config.local.json
+
+# ─── Logs ─────────────────────────────────────────────────────────
+logs/
+*.log
+server/logs/
+
+# ─── Runtime / temporary data ─────────────────────────────────────
+# Workbook data files — these are live runtime data, not source code.
+# If you want to track a blank/template workbook, remove the *.xlsx line
+# and add an explicit exception: !server/data/template.xlsx
+server/data/*.xlsx
+server/data/*.xlsm
+server/data/*.bak
+server/data/backups/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# ─── Testing ──────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ─── Editor / OS ──────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Windows shortcut files
+*.lnk
+
+# ─── macOS (if any contributors use Mac) ──────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ─── Documentation is intentionally tracked — do NOT add docs/ here ──

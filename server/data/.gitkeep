@@ -1,0 +1,3 @@
+# This directory holds the runtime Excel workbook and backup files.
+# The workbook itself is excluded from git via .gitignore (server/data/*.xlsx).
+# This file exists only to preserve the empty directory in version control.
