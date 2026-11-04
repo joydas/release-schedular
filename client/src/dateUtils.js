@@ -7,6 +7,6 @@ export function formatDate(value) {
         day: '2-digit',
         month: 'short',
         year: 'numeric',
-        timeZone: 'UTC',
+        ...(value instanceof Date ? {} : { timeZone: 'UTC' }),
       }).format(date);
 }

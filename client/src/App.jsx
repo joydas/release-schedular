@@ -43,6 +43,7 @@ function routeHref(id) {
 
 export default function App() {
   const [activeId, setActiveId] = useState(getRoute);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const activeSection = sections.find((section) => section.id === activeId);
 
   useEffect(() => {
@@ -58,14 +59,26 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
-        <a className="brand" href="/" onClick={(event) => navigate(event, 'overview')}>
-          <span className="brand-mark" aria-hidden="true">
-            R
-          </span>
-          <span className="brand-name">Release Scheduler</span>
-        </a>
+        <div className="sidebar-brand-row">
+          <a className="brand" href="/" onClick={(event) => navigate(event, 'overview')}>
+            <span className="brand-mark" aria-hidden="true">
+              R
+            </span>
+            <span className="brand-name">Release Scheduler</span>
+          </a>
+          <button
+            aria-expanded={!sidebarCollapsed}
+            aria-label={sidebarCollapsed ? 'Expand navigation panel' : 'Collapse navigation panel'}
+            className="sidebar-toggle"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            title={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            type="button"
+          >
+            <span aria-hidden="true">{sidebarCollapsed ? '›' : '‹'}</span>
+          </button>
+        </div>
         <div className="workspace-label">APPLICATION</div>
         <nav aria-label="Main navigation">
           {['Workspace', 'Planning', 'Insights'].map((group) => (
@@ -75,16 +88,18 @@ export default function App() {
                 .filter((section) => section.group === group)
                 .map((section) => (
                   <a
+                    aria-label={section.label}
                     aria-current={activeId === section.id ? 'page' : undefined}
                     className={`nav-link${activeId === section.id ? ' active' : ''}`}
                     href={routeHref(section.id)}
                     key={section.id}
                     onClick={(event) => navigate(event, section.id)}
+                    title={section.label}
                   >
                     <span className="nav-icon" aria-hidden="true">
                       {section.icon}
                     </span>
-                    {section.label}
+                    <span className="nav-label">{section.label}</span>
                   </a>
                 ))}
             </div>

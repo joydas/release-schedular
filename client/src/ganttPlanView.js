@@ -210,9 +210,9 @@ function featureBarText(feature, overall) {
 }
 
 function featureDisplayLabel(feature) {
-  const name = feature.feature_name || feature.feature_id;
-  const team = feature.team_name || feature.team_id;
-  return team ? `${name} (${team})` : String(name);
+  const name = String(feature.feature_name || feature.feature_id);
+  const visibleName = name.length > 40 ? `${name.slice(0, 40)}...` : name;
+  return `${feature.feature_id}: ${visibleName}`;
 }
 
 function dependencyEndpointTask(tasks, featureId, side, preferredReleaseId = null) {
@@ -371,6 +371,11 @@ export function makeGanttTasks(featureSchedule, dependencies = []) {
         if (finiteNonNegative(allocated)) cumulativeEffort[activity] += allocated;
       }
       cumulativeEffortByFeature.set(featureId, cumulativeEffort);
+      const hasReleaseAllocation = ['build', 'st'].some((activity) => {
+        const allocated =
+          feature.allocated_effort_sp?.[activity] ?? feature[activity]?.allocated_sp;
+        return finiteNonNegative(allocated) && allocated > 1e-9;
+      });
       const scheduledStages = [feature.build || {}, feature.st || {}]
         .map((stage) => stageSpan(stage, window))
         .filter(Boolean);
@@ -379,7 +384,7 @@ export function makeGanttTasks(featureSchedule, dependencies = []) {
         .map((stage) => stage.end)
         .sort()
         .at(-1);
-      if (releaseTaskIncluded) {
+      if (releaseTaskIncluded && hasReleaseAllocation) {
         const taskStatus =
           scheduledStages.length === 0 ||
           feature.status === 'unscheduled' ||
@@ -452,7 +457,7 @@ export function makeGanttTasks(featureSchedule, dependencies = []) {
             : 'no_valid_scheduled_stage_dates'
         );
       }
-      if (status !== 'scheduled') {
+      if (hasReleaseAllocation && status !== 'scheduled') {
         statusRows.push({
           id: `feature-warning-${releaseKey}-${featureKey}`,
           label: `${release.release_name} · ${featureDisplayLabel(feature)}`,

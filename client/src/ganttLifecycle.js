@@ -29,6 +29,16 @@ function timelineStatusLabel(task) {
   return '';
 }
 
+function teamNameLabel(task) {
+  if (task.task_kind !== 'feature' || !task.team_name) return '';
+  return String(task.team_name)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function featureGridText(task) {
   if (task.task_kind !== 'feature') return `<span title="${task.text}">${task.text}</span>`;
   const amount = (value) => {
@@ -58,7 +68,7 @@ export function configureGantt(gantt) {
   gantt.config.show_unscheduled = true;
   gantt.config.work_time = true;
   gantt.config.start_on_monday = true;
-  gantt.config.min_column_width = 20;
+  gantt.config.min_column_width = 30;
   gantt.config.grid_elastic_columns = true;
   gantt.config.scales = [
     { unit: 'month', step: 1, format: '%F %Y' },
@@ -72,35 +82,43 @@ export function configureGantt(gantt) {
   gantt.config.columns = [
     {
       name: 'text',
-      label: 'Release / feature / team',
+      label: 'Release / Feature',
       tree: true,
-      width: '*',
+      width: '380',
       min_width: 340,
       template: featureGridText,
     },
     {
-      name: 'start_date',
-      label: 'Start',
-      align: 'center',
-      width: 100,
-      min_width: 90,
-      template: (task) => formatDate(task.start_date),
+      name: 'team_name',
+      label: 'Team',
+      align: 'left',
+      width: 70,
+      min_width: 65,
+      template: teamNameLabel,
     },
+    // {
+    //   name: 'start_date',
+    //   label: 'Start',
+    //   align: 'center',
+    //   width: 100,
+    //   min_width: 90,
+    //   template: (task) => formatDate(task.start_date),
+    // },
     {
       name: 'duration',
       label: 'Workdays',
       align: 'center',
-      width: 85,
-      min_width: 80,
+      width: 65,
+      min_width: 60,
       template: (task) =>
         task.task_kind === 'feature' && task.timeline_status === 'unscheduled' ? '' : task.duration,
     },
     {
       name: 'allocation_status',
-      label: 'Cumulative allocation',
+      label: 'Allocation',
       align: 'center',
-      width: 140,
-      min_width: 130,
+      width: 80,
+      min_width: 75,
       template: (task) =>
         task.task_kind === 'feature' ? task.allocation_status || 'Allocation unavailable' : '',
     },
@@ -108,8 +126,8 @@ export function configureGantt(gantt) {
       name: 'timeline_status',
       label: 'Timeline',
       align: 'center',
-      width: 100,
-      min_width: 90,
+      width: 85,
+      min_width: 80,
       template: timelineStatusLabel,
     },
   ];
@@ -140,7 +158,7 @@ export function configureGantt(gantt) {
       (dependency) =>
         `${dependency.direction === 'predecessor' ? 'Predecessor' : 'Successor'} dependency: ${dependency.dependency_type} · ${dependency.dependency_status}`
     );
-    return `${task.text}<br/>${task.bar_text}<br/>Cumulative allocation: ${task.allocation_status}<br/>Timeline: ${timeline}${dependencyLines.length ? `<br/>${dependencyLines.join('<br/>')}` : ''}`;
+    return `${task.text}<br/>${task.bar_text}<br/>Allocation: ${task.allocation_status}<br/>Timeline: ${timeline}${dependencyLines.length ? `<br/>${dependencyLines.join('<br/>')}` : ''}`;
   };
 }
 
