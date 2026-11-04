@@ -209,10 +209,116 @@ function featureBarText(feature, overall) {
   return `${featureEffortLabel(feature, 'Build', overall?.required)} | ${featureEffortLabel(feature, 'ST', overall?.required)}`;
 }
 
+function truncateFeatureName(value) {
+  const name = String(value ?? '');
+  return name.length > 40 ? `${name.slice(0, 40)}...` : name;
+}
+
 function featureDisplayLabel(feature) {
-  const name = String(feature.feature_name || feature.feature_id);
-  const visibleName = name.length > 40 ? `${name.slice(0, 40)}...` : name;
-  return `${feature.feature_id}: ${visibleName}`;
+  return `${feature.feature_id}: ${truncateFeatureName(feature.feature_name || feature.feature_id)}`;
+}
+
+function formatAllocationAmount(value) {
+  if (!finiteNonNegative(value)) return '—';
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
+}
+
+export function formatGanttEffortAllocation(task, activity) {
+  const allocated = task.allocated_effort_sp?.[activity] ?? task[activity]?.allocated_sp;
+  const required = task.overall_required_effort_sp?.[activity];
+  return `${formatAllocationAmount(allocated)}/${formatAllocationAmount(required)} SP`;
+}
+
+export function formatGanttTimelineStatus(task) {
+  if (task.timeline_status === 'complete') return 'Complete';
+  if (task.timeline_status === 'partial') return 'Partial';
+  if (task.timeline_status === 'unscheduled') return 'Unscheduled';
+  return '';
+}
+
+export function filterGanttViewByTeam(view, teamId) {
+  if (!teamId) return view;
+  const featureTasks = view.tasks.filter(
+    (task) => task.task_kind === 'feature' && String(task.team_id ?? '') === teamId
+  );
+  const featureIds = new Set(featureTasks.map((task) => task.id));
+  const releaseIds = new Set(featureTasks.map((task) => task.parent));
+  const tasks = view.tasks.filter(
+    (task) => task.task_kind === 'feature' ? featureIds.has(task.id) : releaseIds.has(task.id)
+  );
+  const taskIds = new Set(tasks.map((task) => task.id));
+  return {
+    ...view,
+    tasks,
+    links: view.links.filter((link) => taskIds.has(link.source) && taskIds.has(link.target)),
+    statusRows: view.statusRows.filter(
+      (row) => row.team_id === undefined || String(row.team_id ?? '') === teamId
+    ),
+  };
+}
+
+export function makeGanttExportRows(tasks) {
+  const features = new Map();
+  for (const task of tasks.filter((item) => item.task_kind === 'feature')) {
+    const featureId = String(task.feature_id ?? '');
+    const row = features.get(featureId) || {
+      feature_id: featureId,
+      feature_name: task.display_feature_name || truncateFeatureName(task.feature_name),
+      team: String(task.team_name ?? ''),
+      allocated: { build: 0, st: 0 },
+      required: task.overall_required_effort_sp || {},
+      work_days: 0,
+      has_work_days: false,
+    };
+    for (const activity of ['build', 'st']) {
+      const amount = task.allocated_effort_sp?.[activity] ?? task[activity]?.allocated_sp;
+      if (finiteNonNegative(amount)) row.allocated[activity] += amount;
+    }
+    if (task.timeline_status !== 'unscheduled' && finiteNonNegative(task.duration)) {
+      row.work_days += task.duration;
+      row.has_work_days = true;
+    }
+    row.allocation = String(task.allocation_status ?? '');
+    row.timeline = formatGanttTimelineStatus(task);
+    features.set(featureId, row);
+  }
+  return [...features.values()].map((row) => ({
+    feature_id: row.feature_id,
+    feature_name: row.feature_name,
+    team: row.team,
+    build_allocation: `${formatAllocationAmount(row.allocated.build)}/${formatAllocationAmount(row.required.build)} SP`,
+    st_allocation: `${formatAllocationAmount(row.allocated.st)}/${formatAllocationAmount(row.required.st)} SP`,
+    work_days: row.has_work_days ? row.work_days : '',
+    allocation: row.allocation,
+    timeline: row.timeline,
+  }));
+}
+
+export function makeGanttExportGrid(tasks) {
+  const releases = tasks.filter((task) => task.task_kind === 'release');
+  const features = new Map();
+  for (const task of tasks.filter((item) => item.task_kind === 'feature')) {
+    const featureId = String(task.feature_id ?? '');
+    const feature = features.get(featureId) || {
+      feature_id: featureId,
+      feature_name: task.display_feature_name || truncateFeatureName(task.feature_name),
+      team: String(task.team_name ?? ''),
+      cells: {},
+    };
+    const build = task.allocated_effort_sp?.build ?? task.build?.allocated_sp ?? 0;
+    const st = task.allocated_effort_sp?.st ?? task.st?.allocated_sp ?? 0;
+    if (build > 0 || st > 0) {
+      feature.cells[task.parent] = {
+        value: `Build: ${formatAllocationAmount(build)} SP · ST: ${formatAllocationAmount(st)} SP`,
+        status: task.timeline_status,
+      };
+    }
+    features.set(featureId, feature);
+  }
+  return {
+    releases: releases.map((release) => ({ id: release.id, name: release.release_name || release.text })),
+    rows: [...features.values()],
+  };
 }
 
 function dependencyEndpointTask(tasks, featureId, side, preferredReleaseId = null) {
@@ -338,6 +444,7 @@ export function makeGanttTasks(featureSchedule, dependencies = []) {
       readonly: true,
       task_kind: 'release',
       release_type: release.release_type,
+      release_name: release.release_name,
       ...(window
         ? {
             start_date: window.start,
@@ -416,6 +523,7 @@ export function makeGanttTasks(featureSchedule, dependencies = []) {
           text: safeTaskText(featureDisplayLabel(feature)),
           bar_text: featureBarText(feature, overallAllocation),
           feature_name: feature.feature_name || feature.feature_id,
+          display_feature_name: truncateFeatureName(feature.feature_name || feature.feature_id),
           team_id: feature.team_id ?? null,
           team_name: feature.team_name ?? null,
           parent: releaseTask.id,
@@ -461,6 +569,7 @@ export function makeGanttTasks(featureSchedule, dependencies = []) {
         statusRows.push({
           id: `feature-warning-${releaseKey}-${featureKey}`,
           label: `${release.release_name} · ${featureDisplayLabel(feature)}`,
+          team_id: feature.team_id ?? null,
           status,
           reasons: [...new Set(reasons)],
           effortSummary: featureEffortSummary(overallAllocation),

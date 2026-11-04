@@ -2,7 +2,10 @@
 
 const assert = require('node:assert/strict');
 const { DependencyGraphError } = require('../src/planning/dependencyGraph');
-const { allocateFeatureEffort } = require('../src/planning/featureAllocation');
+const {
+  allocateFeatureEffort,
+  proportionalStEligibility,
+} = require('../src/planning/featureAllocation');
 
 function feature(featureId, priority, inputOrder, overrides = {}) {
   return {
@@ -230,7 +233,7 @@ assert.equal(hardTarget.build.blocked_effort, 25);
 assert.equal(hardTarget.build.allocatable_effort, 75);
 assert.equal(hardTarget.build.allocated_effort, 75);
 assert.equal(hardTarget.build.remaining_effort_after_allocation, 25);
-assert.equal(hardTarget.st.allocated_effort, 50);
+assert.equal(hardTarget.st.allocated_effort, 37.5);
 
 const hardResolved = allocate(
   [
@@ -270,7 +273,7 @@ const hardStBlocked = allocate(
 );
 assert.equal(allocationFor(hardStBlocked, 'TARGET').build.blocked_effort, 0);
 assert.equal(allocationFor(hardStBlocked, 'TARGET').st.blocked_effort, 3);
-assert.equal(allocationFor(hardStBlocked, 'TARGET').st.allocated_effort, 7);
+assert.equal(allocationFor(hardStBlocked, 'TARGET').st.allocated_effort, 0);
 
 const crossTeamHardDependency = allocate(
   [
@@ -580,20 +583,22 @@ const configuredReleaseCapacityCompletesBothFeatures = allocate(
     },
   ]
 );
+const configuredHighReleaseAllocations = allocationFor(
+  configuredReleaseCapacityCompletesBothFeatures,
+  'GLUE-HIGH'
+).release_allocations;
 assert.deepEqual(
-  allocationFor(
-    configuredReleaseCapacityCompletesBothFeatures,
-    'GLUE-HIGH'
-  ).release_allocations.map((entry) => [
+  configuredHighReleaseAllocations.map((entry) => [
     entry.release_id,
     entry.build.allocated_effort,
-    entry.st.allocated_effort,
   ]),
   [
-    ['R-1', 40, 30],
-    ['R-2', 30, 10],
+    ['R-1', 40],
+    ['R-2', 30],
   ]
 );
+assert.ok(Math.abs(configuredHighReleaseAllocations[0].st.allocated_effort - (40 * 40) / 70) < 1e-9);
+assert.ok(Math.abs(configuredHighReleaseAllocations[1].st.allocated_effort - (40 * 30) / 70) < 1e-9);
 assert.deepEqual(
   allocationFor(
     configuredReleaseCapacityCompletesBothFeatures,
@@ -689,16 +694,102 @@ const limitedStCapacityForecast = allocate(
   [],
   [capacity('T-1', 'R-1', 4, 5)]
 );
-assert.equal(allocationFor(limitedStCapacityForecast, 'BUILD-COMPLETE').st.allocated_effort, 5);
+assert.equal(
+  allocationFor(limitedStCapacityForecast, 'BUILD-COMPLETE').st.allocated_effort,
+  3.2
+);
 assert.equal(
   allocationFor(limitedStCapacityForecast, 'BUILD-COMPLETE').st.remaining_effort_after_allocation,
-  3
+  4.8
 );
 assert.ok(
   allocationFor(limitedStCapacityForecast, 'BUILD-COMPLETE').incomplete_reasons.includes(
-    'st_capacity_exhausted'
+    'st_build_proportional_limit'
   )
 );
+
+const proportionalExample = allocate(
+  [feature('PROPORTIONAL-EXAMPLE', 1, 1, { build_estimate_current: 50, st_estimate_current: 20 })],
+  [],
+  [capacity('T-1', 'R-1', 30, 21)]
+);
+assert.equal(allocationFor(proportionalExample, 'PROPORTIONAL-EXAMPLE').build.allocated_effort, 30);
+assert.equal(allocationFor(proportionalExample, 'PROPORTIONAL-EXAMPLE').st.allocated_effort, 12);
+assert.equal(
+  allocationFor(proportionalExample, 'PROPORTIONAL-EXAMPLE').build.remaining_effort_after_allocation,
+  20
+);
+assert.equal(
+  allocationFor(proportionalExample, 'PROPORTIONAL-EXAMPLE').st.remaining_effort_after_allocation,
+  8
+);
+assert.equal(proportionalExample.capacity_summary[0].st.capacity_remaining, 9);
+
+const proportionalCarryover = allocate(
+  [feature('PROPORTIONAL-CARRY', 1, 1, { build_estimate_current: 50, st_estimate_current: 20 })],
+  [],
+  [capacity('T-1', 'R-1', 30, 21), capacity('T-1', 'R-2', 20, 21)],
+  [{ release_id: 'R-1', priority_order: 1 }, { release_id: 'R-2', priority_order: 2 }]
+);
+assert.deepEqual(
+  allocationFor(proportionalCarryover, 'PROPORTIONAL-CARRY').release_allocations.map((item) => [
+    item.build.allocated_effort,
+    item.st.allocated_effort,
+  ]),
+  [
+    [30, 12],
+    [20, 8],
+  ]
+);
+assert.equal(allocationFor(proportionalCarryover, 'PROPORTIONAL-CARRY').st.allocated_effort, 20);
+
+const proportionalInsufficientStCapacity = allocate(
+  [feature('PROPORTIONAL-ST-CAP', 1, 1, { build_estimate_current: 50, st_estimate_current: 20 })],
+  [],
+  [capacity('T-1', 'R-1', 30, 5), capacity('T-1', 'R-2', 20, 21)],
+  [{ release_id: 'R-1', priority_order: 1 }, { release_id: 'R-2', priority_order: 2 }]
+);
+assert.deepEqual(
+  allocationFor(proportionalInsufficientStCapacity, 'PROPORTIONAL-ST-CAP').release_allocations.map(
+    (item) => [item.build.allocated_effort, item.st.allocated_effort]
+  ),
+  [
+    [30, 5],
+    [20, 15],
+  ],
+  'ST eligible but not allocated due to release capacity remains outstanding for later capacity'
+);
+
+const proportionalUnusedCapacity = allocate(
+  [
+    feature('PROPORTIONAL-PRIMARY', 1, 1, {
+      build_estimate_current: 50,
+      st_estimate_current: 20,
+    }),
+    feature('PROPORTIONAL-OTHER-TEAM', 1, 2, {
+      team_id: 'T-2',
+      build_estimate_current: 0,
+      st_estimate_current: 5,
+    }),
+  ],
+  [],
+  [capacity('T-1', 'R-1', 30, 21), capacity('T-2', 'R-1', 0, 5)]
+);
+assert.equal(proportionalUnusedCapacity.capacity_summary[0].st.capacity_remaining, 9);
+assert.equal(
+  allocationFor(proportionalUnusedCapacity, 'PROPORTIONAL-OTHER-TEAM').st.allocated_effort,
+  5,
+  'ST capacity not consumed by proportional eligibility does not reserve capacity from other eligible work'
+);
+
+const zeroBuildRequirement = allocate(
+  [feature('ZERO-BUILD-ST', 1, 1, { build_estimate_current: 0, st_estimate_current: 10 })],
+  [],
+  [capacity('T-1', 'R-1', 0, 10)]
+);
+assert.equal(allocationFor(zeroBuildRequirement, 'ZERO-BUILD-ST').st.allocated_effort, 10);
+assert.equal(proportionalStEligibility(10, 0, 0), 10);
+assert.equal(proportionalStEligibility(10, undefined, 0), 10);
 
 const stagedBuildAllocation = allocate(
   [feature('STAGED', 1, 1, { build_estimate_current: 10, st_estimate_current: 8 })],

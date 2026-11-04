@@ -7,6 +7,9 @@ import {
   addGanttExclusiveEndDates,
   loadComputedGanttSchedule,
   loadScenarioGanttSchedule,
+  filterGanttViewByTeam,
+  makeGanttExportGrid,
+  makeGanttExportRows,
   makeGanttTasks,
 } from './ganttPlanView';
 import { configureGantt, mountGanttChart, updateGanttTasks } from './ganttLifecycle';
@@ -72,6 +75,9 @@ export default function GanttSpike() {
   const [scenario, setScenario] = useState(null);
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioError, setScenarioError] = useState('');
+  const [selectedTeamId, setSelectedTeamId] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -132,6 +138,52 @@ export default function GanttSpike() {
       displayResult.plan?.dependency_graph?.edges || []
     );
   }, [displayResult]);
+  const teams = useMemo(() => {
+    const byId = new Map();
+    for (const feature of result?.plan?.schedule || []) {
+      if (feature.team_id === null || feature.team_id === undefined || feature.team_id === '') continue;
+      byId.set(String(feature.team_id), String(feature.team_name || feature.team_id));
+    }
+    return [...byId].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [result]);
+  const visibleView = useMemo(
+    () => filterGanttViewByTeam(displayResult ? displayView : view, selectedTeamId),
+    [displayResult, displayView, selectedTeamId, view]
+  );
+
+  const exportToExcel = useCallback(async () => {
+    setExporting(true);
+    setExportError('');
+    try {
+      const response = await fetch('/api/plan/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rows: makeGanttExportRows(visibleView.tasks),
+          gantt: makeGanttExportGrid(visibleView.tasks),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Export failed with status ${response.status}.`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const today = new Date();
+      const dateStamp = `${String(today.getDate()).padStart(2, '0')}${String(today.getMonth() + 1).padStart(2, '0')}${today.getFullYear()}`;
+      link.download = `schedular_output_${dateStamp}.xlsx`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      setExportError(formatApiError(error, 'The schedule could not be exported.'));
+    } finally {
+      setExporting(false);
+    }
+  }, [visibleView]);
 
   useEffect(() => {
     for (const diagnostic of view.linkDiagnostics) {
@@ -152,7 +204,18 @@ export default function GanttSpike() {
             result.
           </p>
         </div>
-        <span className="phase-chip">Computed plan · no edits saved</span>
+        <div className="gantt-page-actions">
+          <span className="phase-chip">Computed plan · no edits saved</span>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={exportToExcel}
+            disabled={loading || exporting || !makeGanttExportRows(visibleView.tasks).length}
+          >
+            {exporting ? 'Preparing Excel…' : 'Export to Excel'}
+          </button>
+          {exportError && <span className="gantt-scenario-error" role="alert">{exportError}</span>}
+        </div>
       </div>
 
       {loading ? (
@@ -187,7 +250,8 @@ export default function GanttSpike() {
         </div>
       ) : (
         <>
-          <details className="gantt-spike-card gantt-scenario-card">
+          <div className="gantt-schedule-ribbon">
+            <details className="gantt-spike-card gantt-scenario-card">
             <summary className="gantt-scenario-heading">What-if estimation changes</summary>
             <div className="gantt-scenario-content">
               <div className="gantt-spike-note">
@@ -243,6 +307,22 @@ export default function GanttSpike() {
             {scenarioError && <p className="gantt-scenario-error" role="alert">{scenarioError}</p>}
             </div>
           </details>
+            {teams.length > 1 && (
+              <label className="gantt-team-filter">
+                Team
+                <select
+                  aria-label="Filter schedule by team"
+                  value={selectedTeamId}
+                  onChange={(event) => setSelectedTeamId(event.target.value)}
+                >
+                  <option value="">All teams</option>
+                  {teams.map((team) => (
+                    <option key={team.id} value={team.id}>{team.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
           <section className="gantt-spike-card" aria-label="Computed release plan">
             <div className="gantt-spike-note">
               <strong>{scenario ? 'What-if projection' : 'Baseline projection'} · workbook version {result.workbookVersion}</strong>
@@ -256,14 +336,11 @@ export default function GanttSpike() {
               {' · '}
               <span className="dependency-legend-normal">Normal (dashed, subtle)</span>
             </p>
-            <GanttChart
-              tasks={displayResult ? displayView.tasks : view.tasks}
-              links={displayResult ? displayView.links : view.links}
-            />
-            {(displayResult ? displayView.statusRows : view.statusRows).length > 0 && (
+            <GanttChart tasks={visibleView.tasks} links={visibleView.links} />
+            {visibleView.statusRows.length > 0 && (
               <section className="gantt-status-list" aria-labelledby="gantt-status-heading">
                 <h2 id="gantt-status-heading">Partial and unscheduled work</h2>
-                {(displayResult ? displayView.statusRows : view.statusRows).map((row) => (
+                {visibleView.statusRows.map((row) => (
                   <div className="gantt-status-row" key={row.id}>
                     <strong>{row.label}</strong>
                     <span className={`gantt-status-badge status-${row.status}`}>{row.status}</span>

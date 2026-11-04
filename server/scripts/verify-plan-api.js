@@ -45,6 +45,15 @@ async function requestJson(baseUrl, route, { method = 'GET', body } = {}) {
   return { status: response.status, json };
 }
 
+async function requestBuffer(baseUrl, route, body) {
+  const response = await fetch(`${baseUrl}${route}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, headers: response.headers, buffer: Buffer.from(await response.arrayBuffer()) };
+}
+
 async function mutate(service, method, record) {
   const expectedVersion = await service.getWorkbookVersion();
   return service[method](record, { expectedVersion });
@@ -220,6 +229,36 @@ async function verifySuccessfulReadOnlyPlan(tempRoot) {
     assert.equal(scheduled.json.data.releases[0].features[0].build.allocated_sp, 1);
     assert.equal(scheduled.json.data.releases[0].features[0].build.start_date, '2026-01-01');
     assert.equal(scheduled.json.data.releases[0].features[0].build.status, 'scheduled');
+    const exported = await requestBuffer(app.baseUrl, '/api/plan/export', {
+      rows: [{ feature_id: 'F-1', feature_name: 'Feature one', team: 'Team 1', build_allocation: '1/3 SP', st_allocation: '0/0 SP', work_days: 1, allocation: 'Partially Allocated', timeline: 'Partial' }],
+      gantt: {
+        releases: [{ id: 'release-R-1', name: 'Release 1' }, { id: 'release-R-2', name: 'Release 2' }],
+        rows: [{ feature_id: 'F-1', feature_name: 'Feature one', team: 'Team 1', cells: {
+          'release-R-1': { value: 'Build: 1 SP · ST: 0 SP', status: 'partial' },
+          'release-R-2': { value: 'Build: 2 SP · ST: 1 SP', status: 'complete' },
+        } }],
+      },
+    });
+    assert.equal(exported.status, 200);
+    assert.match(exported.headers.get('content-type'), /spreadsheetml\.sheet/);
+    const exportBook = new ExcelJS.Workbook();
+    await exportBook.xlsx.load(exported.buffer);
+    assert.equal(exportBook.worksheets.length, 1, 'Schedule and Gantt must be combined on one sheet');
+    const combinedSheet = exportBook.getWorksheet('Schedule and Gantt');
+    assert.equal(combinedSheet.getRow(2).getCell(1).value, 'Feature ID');
+    assert.equal(combinedSheet.getRow(2).getCell(8).value, 'Timeline');
+    assert.equal(combinedSheet.getRow(3).getCell(1).value, 'F-1');
+    assert.equal(combinedSheet.getRow(1).getCell(1).value, 'Schedule summary');
+    assert.equal(combinedSheet.getRow(1).getCell(9).value, 'Gantt allocation by release · green = complete; yellow = partial');
+    assert.equal(combinedSheet.getRow(2).getCell(9).value, 'Release 1');
+    assert.equal(combinedSheet.getRow(2).getCell(10).value, 'Release 2');
+    assert.equal(combinedSheet.getRow(3).getCell(9).value, 'Build: 1 SP · ST: 0 SP');
+    assert.equal(combinedSheet.getRow(3).getCell(9).fill.fgColor.argb, 'FFFFEB9C');
+    assert.equal(combinedSheet.getRow(3).getCell(10).fill.fgColor.argb, 'FFC6EFCE');
+    assert.equal(await workbookHash(workbookPath), hashBefore, 'Excel export must not modify workbook data');
+    const invalidExport = await requestJson(app.baseUrl, '/api/plan/export', { method: 'POST', body: { rows: [{ unknown: 'column' }], gantt: { releases: [], rows: [] } } });
+    assert.equal(invalidExport.status, 400);
+    assert.equal(invalidExport.json.code, 'INVALID_EXPORT_ROWS');
     const staleSchedule = await requestJson(app.baseUrl, '/api/plan/schedule', {
       method: 'POST',
       body: { plan: response.json.data, expectedVersion: versionBefore + 1 },

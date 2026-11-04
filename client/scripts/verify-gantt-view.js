@@ -6,6 +6,9 @@ import { gantt } from 'dhtmlx-gantt';
 import {
   addGanttExclusiveEndDates,
   loadComputedGanttSchedule,
+  filterGanttViewByTeam,
+  makeGanttExportGrid,
+  makeGanttExportRows,
   makeGanttTasks,
 } from '../src/ganttPlanView.js';
 import { compactWeekLabel, configureGantt } from '../src/ganttLifecycle.js';
@@ -227,6 +230,75 @@ assert.ok(
   )
 );
 assert.deepEqual(view.linkDiagnostics, []);
+const featureTasksByTeam = view.tasks.filter((task) => task.task_kind === 'feature');
+const multiTeamView = {
+  ...view,
+  tasks: view.tasks.map((task, index) => task.task_kind === 'feature'
+    ? { ...task, team_id: index % 2 ? 'T-2' : 'T-1', team_name: index % 2 ? 'Team Two' : 'Team One' }
+    : task),
+};
+const teamView = filterGanttViewByTeam(multiTeamView, 'T-1');
+assert.ok(teamView.tasks.filter((task) => task.task_kind === 'feature').length > 0);
+assert.ok(teamView.tasks.filter((task) => task.task_kind === 'feature').every((task) => task.team_id === 'T-1'));
+assert.ok(teamView.tasks.filter((task) => task.task_kind === 'release').every((task) => teamView.tasks.some((feature) => feature.parent === task.id)));
+assert.ok(teamView.links.every((link) => teamView.tasks.some((task) => task.id === link.source) && teamView.tasks.some((task) => task.id === link.target)));
+assert.equal(filterGanttViewByTeam(multiTeamView, ''), multiTeamView);
+const selectedTeamExportRows = makeGanttExportRows(teamView.tasks);
+const selectedTeamGantt = makeGanttExportGrid(teamView.tasks);
+assert.ok(selectedTeamExportRows.every((row) => row.team === 'Team One'));
+assert.ok(selectedTeamGantt.rows.every((row) => row.team === 'Team One'));
+assert.deepEqual(
+  new Set(selectedTeamExportRows.map((row) => row.feature_id)),
+  new Set(teamView.tasks.filter((task) => task.task_kind === 'feature').map((task) => String(task.feature_id)))
+);
+assert.deepEqual(
+  new Set(selectedTeamGantt.rows.map((row) => row.feature_id)),
+  new Set(teamView.tasks.filter((task) => task.task_kind === 'feature').map((task) => String(task.feature_id)))
+);
+const exportRows = makeGanttExportRows(view.tasks);
+assert.deepEqual(Object.keys(exportRows[0] || {}), [
+  'feature_id', 'feature_name', 'team', 'build_allocation', 'st_allocation', 'work_days', 'allocation', 'timeline',
+]);
+assert.equal(exportRows.length, new Set(featureTasksByTeam.map((task) => task.feature_id)).size);
+const aggregatedExport = makeGanttExportRows([
+  {
+    ...featureTasksByTeam[0],
+    feature_id: 'AGGREGATED-FEATURE',
+    allocated_effort_sp: { build: 2, st: 1 },
+    overall_required_effort_sp: { build: 5, st: 3 },
+    duration: 2,
+    timeline_status: 'partial',
+  },
+  {
+    ...featureTasksByTeam[0],
+    feature_id: 'AGGREGATED-FEATURE',
+    allocated_effort_sp: { build: 3, st: 2 },
+    overall_required_effort_sp: { build: 5, st: 3 },
+    duration: 3,
+    timeline_status: 'complete',
+  },
+]);
+assert.equal(aggregatedExport.length, 1);
+assert.equal(aggregatedExport[0].build_allocation, '5/5 SP');
+assert.equal(aggregatedExport[0].st_allocation, '3/3 SP');
+assert.equal(aggregatedExport[0].work_days, 5);
+assert.equal(aggregatedExport[0].timeline, 'Complete');
+const releaseFixture = multiTeamView.tasks.find((task) => task.task_kind === 'release');
+const featureFixture = multiTeamView.tasks.find((task) => task.task_kind === 'feature');
+const ganttExport = makeGanttExportGrid([
+  releaseFixture,
+  {
+    ...featureFixture,
+    id: 'feature-GANTT-FIXTURE',
+    feature_id: 'GANTT-FIXTURE',
+    parent: releaseFixture.id,
+    allocated_effort_sp: { build: 2, st: 1 },
+    timeline_status: 'partial',
+  },
+]);
+assert.ok(ganttExport.releases.length > 0);
+assert.ok(ganttExport.rows.every((row) => row.feature_id && row.cells));
+assert.ok(ganttExport.rows.some((row) => Object.keys(row.cells).length > 0));
 assert.ok(view.tasks.find((task) => task.feature_id === 'F2').dependency_details.length > 0);
 assert.equal(
   makeGanttTasks(loaded.featureSchedule, [{ ...dependencies[0], dependency_status: 'Resolved' }])

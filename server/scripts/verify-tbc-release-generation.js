@@ -141,7 +141,7 @@ assert.equal(zeroCapacity.releases.length, 0);
 assert.equal(zeroCapacity.stop_reason, 'no_usable_capacity');
 
 const multiReleaseFeatures = [
-  feature('BUILD', 1, 1, { build_estimate_current: 4 }),
+  feature('BUILD', 1, 1, { build_estimate_current: 4, st_estimate_current: 0 }),
   feature('ST', 2, 2, {
     release_id: 'R-2',
     build_estimate_current: 2,
@@ -164,7 +164,7 @@ const independentAverages = generate(
   multiRealCapacities,
   multiRealAllocation
 );
-assert.equal(independentAverages.releases.length, 5);
+assert.equal(independentAverages.releases.length, 6);
 assert.equal(independentAverages.capacities[0].build_capacity, 1);
 assert.equal(independentAverages.capacities[0].st_capacity, 2);
 assert.equal(resultFor(independentAverages, 0, 'BUILD').build_allocated_effort, 1);
@@ -175,8 +175,11 @@ assert.ok(
     'higher_priority_feature_incomplete'
   )
 );
-assert.equal(resultFor(independentAverages, 1, 'ST').st_allocated_effort, 2);
+assert.equal(resultFor(independentAverages, 1, 'ST').st_allocated_effort, 0);
 assert.equal(resultFor(independentAverages, 2, 'ST').st_allocated_effort, 2);
+assert.equal(resultFor(independentAverages, 3, 'ST').st_allocated_effort, 2);
+assert.equal(resultFor(independentAverages, 4, 'ST').st_allocated_effort, 2);
+assert.equal(resultFor(independentAverages, 5, 'ST').st_allocated_effort, 2);
 
 const fractionalFeatures = [feature('FRACTIONAL', 1, 1, { build_estimate_current: 2.25 })];
 const fractionalReleases = [release('R-1'), release('R-2')];
@@ -244,6 +247,54 @@ const oneTbc = generate(
 assert.equal(oneTbc.releases.length, 2);
 assert.equal(resultFor(oneTbc, 0, 'ONE-TBC').build_allocated_effort, 1);
 assert.equal(resultFor(oneTbc, 1, 'ONE-TBC').build_allocated_effort, 1);
+
+const proportionalTbcFeatures = [
+  feature('PROPORTIONAL-TBC', 1, 1, {
+    build_estimate_current: 50,
+    st_estimate_current: 20,
+  }),
+];
+const proportionalTbcReleases = [release('R-1'), release('R-2', '2026-01-13')];
+const proportionalTbcCapacities = [
+  capacity('T-1', 'R-1', 30, 5),
+  capacity('T-1', 'R-2', 0, 21),
+];
+const proportionalTbcRealAllocation = allocateReal(
+  proportionalTbcFeatures,
+  [],
+  proportionalTbcReleases,
+  proportionalTbcCapacities
+);
+assert.deepEqual(
+  proportionalTbcRealAllocation.allocations[0].release_allocations.map((entry) => [
+    entry.build.allocated_effort,
+    entry.st.allocated_effort,
+  ]),
+  [
+    [30, 5],
+    [0, 7],
+  ]
+);
+const proportionalTbc = generate(
+  proportionalTbcFeatures,
+  [],
+  proportionalTbcReleases,
+  proportionalTbcCapacities,
+  proportionalTbcRealAllocation
+);
+assert.deepEqual(
+  proportionalTbc.allocations.map((entry) => {
+    const featureAllocation = entry.features.find((featureRow) => featureRow.feature_id === 'PROPORTIONAL-TBC');
+    return [featureAllocation.build_allocated_effort, featureAllocation.st_allocated_effort];
+  }),
+  [
+    [15, 6],
+    [5, 2],
+  ],
+  'generated TBC releases apply proportional ST eligibility using cumulative Build allocations'
+);
+assert.equal(proportionalTbc.remaining_work[0].build_effort, 0);
+assert.equal(proportionalTbc.remaining_work[0].st_effort, 0);
 
 const dependencyFeatures = [
   feature('PREDECESSOR', 1, 1, { build_estimate_current: 2 }),

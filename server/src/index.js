@@ -3,6 +3,7 @@
 const path = require('node:path');
 const express = require('express');
 const multer = require('multer');
+const ExcelJS = require('exceljs');
 
 const {
   WorkbookService,
@@ -369,6 +370,103 @@ app.post('/api/plan/schedule', async (req, res) => {
     return res.status(200).json({ ok: true, data, workbookVersion });
   } catch (error) {
     return sendPlanningError(res, error);
+  }
+});
+
+app.post('/api/plan/export', async (req, res) => {
+  const rows = req.body?.rows;
+  const gantt = req.body?.gantt;
+  const columns = [
+    ['feature_id', 'Feature ID'],
+    ['feature_name', 'Feature name'],
+    ['team', 'Team'],
+    ['build_allocation', 'Build allocation'],
+    ['st_allocation', 'ST allocation'],
+    ['work_days', 'Work days'],
+    ['allocation', 'Allocation'],
+    ['timeline', 'Timeline'],
+  ];
+  if (
+    !Array.isArray(rows) || rows.length > 10000 ||
+    rows.some((row) => !row || typeof row !== 'object' || Array.isArray(row) ||
+      Object.keys(row).some((key) => !columns.some(([field]) => field === key)) ||
+      columns.some(([field]) => row[field] !== undefined && !['string', 'number'].includes(typeof row[field])))
+  ) {
+    return res.status(400).json({ ok: false, code: 'INVALID_EXPORT_ROWS', error: 'Provide valid schedule rows for export.' });
+  }
+  if (
+    !gantt || typeof gantt !== 'object' || Array.isArray(gantt) ||
+    !Array.isArray(gantt.releases) || !Array.isArray(gantt.rows) ||
+    gantt.releases.length > 500 || gantt.rows.length > 10000 ||
+    gantt.releases.some((release) => !release || typeof release.id !== 'string' || typeof release.name !== 'string') ||
+    gantt.rows.some((row) =>
+      !row || typeof row !== 'object' || Array.isArray(row) ||
+      typeof row.feature_id !== 'string' || typeof row.feature_name !== 'string' ||
+      typeof row.team !== 'string' || !row.cells || typeof row.cells !== 'object' || Array.isArray(row.cells) ||
+      Object.entries(row.cells).some(([releaseId, cell]) =>
+        !gantt.releases.some((release) => release.id === releaseId) ||
+        !cell || typeof cell !== 'object' || typeof cell.value !== 'string' ||
+        !['complete', 'partial', 'unscheduled'].includes(cell.status)
+      )
+    )
+  ) {
+    return res.status(400).json({ ok: false, code: 'INVALID_EXPORT_GANTT', error: 'Provide valid Gantt allocation data for export.' });
+  }
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Schedule and Gantt', { views: [{ state: 'frozen', ySplit: 2 }] });
+    const ganttColumns = gantt.releases.map((release, index) => ({
+      header: release.name,
+      key: `gantt_release_${index}`,
+      width: 28,
+    }));
+    sheet.columns = [
+      ...columns.map(([key, header], index) => ({
+        header, key, width: [18, 42, 24, 22, 22, 14, 18, 16][index],
+      })),
+      ...ganttColumns,
+    ];
+    const lastColumn = columns.length + ganttColumns.length;
+    sheet.mergeCells(1, 1, 1, columns.length);
+    sheet.getCell(1, 1).value = 'Schedule summary';
+    sheet.getCell(1, 1).font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF315FE8' } };
+    if (ganttColumns.length) {
+      sheet.mergeCells(1, columns.length + 1, 1, lastColumn);
+      sheet.getCell(1, columns.length + 1).value = 'Gantt allocation by release · green = complete; yellow = partial';
+      sheet.getCell(1, columns.length + 1).font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+      sheet.getCell(1, columns.length + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF315FE8' } };
+    }
+    sheet.getRow(2).values = [...columns.map(([, header]) => header), ...ganttColumns.map((item) => item.header)];
+    sheet.getRow(2).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    sheet.getRow(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF315FE8' } };
+    const ganttRowsByFeatureId = new Map(gantt.rows.map((row) => [row.feature_id, row]));
+    for (const row of rows) {
+      const excelRow = sheet.addRow([
+        ...columns.map(([key]) => row[key] ?? ''),
+        ...gantt.releases.map((release) => ganttRowsByFeatureId.get(row.feature_id)?.cells[release.id]?.value ?? ''),
+      ]);
+      gantt.releases.forEach((release, index) => {
+        const cell = ganttRowsByFeatureId.get(row.feature_id)?.cells[release.id];
+        if (!cell) return;
+        excelRow.getCell(columns.length + index + 1).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: cell.status === 'complete' ? 'FFC6EFCE' : 'FFFFEB9C' },
+        };
+      });
+    }
+    sheet.autoFilter = {
+      from: { row: 2, column: 1 },
+      to: { row: Math.max(2, rows.length + 2), column: lastColumn },
+    };
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.status(200);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="release-schedule.xlsx"');
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: 'EXPORT_FAILED', error: 'The schedule export could not be generated.' });
   }
 });
 

@@ -1,6 +1,7 @@
 'use strict';
 
 const { getFeatureConsiderationOrder } = require('./featureOrdering');
+const { proportionalStEligibility } = require('./featureAllocation');
 
 const SPRINT_WORKDAYS = Object.freeze([15, 15, 5]);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -182,6 +183,12 @@ function createPendingWork(features, realAllocation) {
       return {
         schedulable: Math.max(0, Number(row.allocatable_effort) - Number(row.allocated_effort)),
         blocked: Math.max(0, Number(row.blocked_effort)),
+        required_total: Number.isFinite(Number(row.requested_remaining_effort))
+          ? Math.max(0, Number(row.requested_remaining_effort))
+          : 0,
+        allocated_total: Number.isFinite(Number(row.allocated_effort))
+          ? Math.max(0, Number(row.allocated_effort))
+          : 0,
       };
     };
     return {
@@ -260,13 +267,27 @@ function allocateTbcSprint(work, order, capacities) {
         const stAvailable = Math.max(0, capacity.st_capacity - capacity.st_used);
         buildAllocated = Math.min(feature.build.schedulable, buildAvailable);
         capacity.build_used += buildAllocated;
-        stAllocated = Math.min(feature.st.schedulable, stAvailable);
+        const stEligibleThroughSprint = proportionalStEligibility(
+          feature.st.required_total,
+          feature.build.required_total,
+          feature.build.allocated_total + buildAllocated
+        );
+        const stEligibleAvailable = Math.max(
+          0,
+          stEligibleThroughSprint - feature.st.allocated_total
+        );
+        stAllocated = Math.min(feature.st.schedulable, stAvailable, stEligibleAvailable);
         capacity.st_used += stAllocated;
         if (feature.build.schedulable > buildAllocated) {
           reasons.push('build_capacity_exhausted');
         }
         if (feature.st.schedulable > stAllocated) {
-          reasons.push('st_capacity_exhausted');
+          if (stAvailable < feature.st.schedulable && stAllocated >= stAvailable - 1e-9) {
+            reasons.push('st_capacity_exhausted');
+          }
+          if (stEligibleAvailable < Math.min(feature.st.schedulable, stAvailable) - 1e-9) {
+            reasons.push('st_build_proportional_limit');
+          }
         }
       }
     }
@@ -280,6 +301,8 @@ function allocateTbcSprint(work, order, capacities) {
 
     feature.build.schedulable = Math.max(0, feature.build.schedulable - buildAllocated);
     feature.st.schedulable = Math.max(0, feature.st.schedulable - stAllocated);
+    feature.build.allocated_total += buildAllocated;
+    feature.st.allocated_total += stAllocated;
     allocations.push({
       feature_id: featureId,
       team_id: teamId,

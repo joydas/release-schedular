@@ -3,6 +3,22 @@
 const { calculateHardDependencyBlocking } = require('./hardDependencyBlocking');
 const { getFeatureConsiderationOrder } = require('./featureOrdering');
 
+const EFFORT_EPSILON = 1e-9;
+
+function proportionalStEligibility(totalStRequired, totalBuildRequired, cumulativeBuildAllocated) {
+  const stRequired = Number(totalStRequired);
+  if (!Number.isFinite(stRequired) || stRequired <= 0) return 0;
+
+  const buildRequired = Number(totalBuildRequired);
+  if (!Number.isFinite(buildRequired) || buildRequired <= EFFORT_EPSILON) return stRequired;
+
+  const buildAllocated = Number(cumulativeBuildAllocated);
+  if (!Number.isFinite(buildAllocated) || buildAllocated <= 0) return 0;
+
+  const buildProgress = Math.min(1, buildAllocated / buildRequired);
+  return Math.min(stRequired, stRequired * buildProgress);
+}
+
 class FeatureAllocationError extends Error {
   constructor(message, { code, featureId = null, capacityKey = null } = {}) {
     super(message);
@@ -170,6 +186,8 @@ function allocateFeatureEffort({ features, dependencies, releases, capacities })
       team_id: String(feature.team_id ?? '').trim() || null,
       build_remaining: blocking.build.allocatable_effort,
       st_remaining: blocking.st.allocatable_effort,
+      build_required_total: blocking.build.remaining_effort,
+      st_required_total: blocking.st.remaining_effort,
       build_allocated: 0,
       st_allocated: 0,
       release_allocations: [],
@@ -210,6 +228,7 @@ function allocateFeatureEffort({ features, dependencies, releases, capacities })
       const stAvailable = stCapacityAvailable;
       let buildAllocated = 0;
       let stAllocated = 0;
+      let stEligibleAvailable = 0;
 
       if (blockedByHigherPriority) {
         addReason(reasons, 'higher_priority_feature_incomplete');
@@ -219,7 +238,13 @@ function allocateFeatureEffort({ features, dependencies, releases, capacities })
         addReason(reasons, 'capacity_record_missing');
       } else {
         buildAllocated = Math.min(buildBefore, buildAvailable);
-        stAllocated = Math.min(stBefore, stAvailable);
+        const stEligibleThroughRelease = proportionalStEligibility(
+          pending.st_required_total,
+          pending.build_required_total,
+          pending.build_allocated + buildAllocated
+        );
+        stEligibleAvailable = Math.max(0, stEligibleThroughRelease - pending.st_allocated);
+        stAllocated = Math.min(stBefore, stAvailable, stEligibleAvailable);
         pending.build_remaining = Math.max(0, buildBefore - buildAllocated);
         pending.st_remaining = Math.max(0, stBefore - stAllocated);
         pending.build_allocated += buildAllocated;
@@ -230,7 +255,12 @@ function allocateFeatureEffort({ features, dependencies, releases, capacities })
           addReason(reasons, 'build_capacity_exhausted');
         }
         if (pending.st_remaining > 0) {
-          addReason(reasons, 'st_capacity_exhausted');
+          if (stAvailable < stBefore && stAllocated >= stAvailable - EFFORT_EPSILON) {
+            addReason(reasons, 'st_capacity_exhausted');
+          }
+          if (stEligibleAvailable < Math.min(stBefore, stAvailable) - EFFORT_EPSILON) {
+            addReason(reasons, 'st_build_proportional_limit');
+          }
         }
       }
 
@@ -355,4 +385,8 @@ function allocateFeatureEffort({ features, dependencies, releases, capacities })
   };
 }
 
-module.exports = { FeatureAllocationError, allocateFeatureEffort };
+module.exports = {
+  FeatureAllocationError,
+  allocateFeatureEffort,
+  proportionalStEligibility,
+};
